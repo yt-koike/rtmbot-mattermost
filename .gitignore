@@ -16,3 +16,4 @@ tests/.cache
 dist/
 rtmbot.egg-info/
 MANIFEST
+rtmbot_mattermost.egg-info

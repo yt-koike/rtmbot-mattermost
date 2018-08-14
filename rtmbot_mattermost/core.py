@@ -4,11 +4,12 @@ import sys
 import os
 import time
 import logging
-import json
+import asyncio
 
-from slackclient import SlackClient
+from mattermostdriver import Driver
 
-from rtmbot.utils.module_loading import import_string
+from rtmbot_mattermost.utils.module_loading import import_string
+from rtmbot_mattermost.utils.parse import parse_message
 
 sys.dont_write_bytecode = True
 
@@ -18,7 +19,12 @@ class RtmBot(object):
         '''
             Params:
                 - config (dict):
-                    - SLACK_TOKEN: your authentication token from Slack
+                    - URL: your mattermost address
+                    - PORT: your mattermost port
+                    - SCHEME: protocol for access your mattermost
+                        http or https
+                    - USER_NAME: your mattermost user name
+                    - USER_PASS: your mattermost user password
                     - BASE_PATH (optional: defaults to execution directory) RtmBot will
                         look in this directory for plugins.
                     - LOGFILE (optional: defaults to rtmbot.log) The filename for logs, will
@@ -29,10 +35,18 @@ class RtmBot(object):
         # set the config object
         self.config = config
 
-        # set slack token
-        self.token = config.get('SLACK_TOKEN', None)
+        self.url = config.get('URL', None)
+        if not self.url:
+            raise ValueError("Please add a URL to your config file.")
+        self.token = config.get('TOKEN', None)
         if not self.token:
-            raise ValueError("Please add a SLACK_TOKEN to your config file.")
+            raise ValueError("Please add a TOKEN to your config file.")
+        self.scheme = config.get('SCHEME', None)
+        if not self.scheme:
+            self.scheme = "https"
+        self.port = config.get('PORT', None)
+        if not self.port:
+            self.port = 443
 
         # get list of directories to search for loading plugins
         self.active_plugins = config.get('ACTIVE_PLUGINS', [])
@@ -58,21 +72,19 @@ class RtmBot(object):
         logging.info('Initialized in: {}'.format(self.directory))
 
         # initialize stateful fields
-        self.last_ping = 0
         self.bot_plugins = []
-        self.slack_client = SlackClient(self.token)
+        self.client = Driver({"url": self.url, "token": self.token, "scheme": self.scheme, "port": self.port})
 
     def _dbg(self, debug_string):
         if self.debug:
             logging.debug(debug_string)
 
     def connect(self):
-        """Convenience method that creates Server instance"""
-        self.slack_client.rtm_connect()
+        self.client.login()
 
-    def _start(self):
-        self.connect()
-        self.load_plugins()
+    @asyncio.coroutine
+    def _start(self, m):
+        message = parse_message(m)
         for plugin in self.bot_plugins:
             try:
                 self._dbg("Registering jobs for {}".format(plugin.name))
@@ -83,32 +95,24 @@ class RtmBot(object):
                 self._dbg("Error registering jobs for {} - {}".format(
                     plugin.name, error)
                 )
-        while True:
-            for reply in self.slack_client.rtm_read():
-                self.input(reply)
-            self.crons()
-            self.output()
-            self.autoping()
-            time.sleep(.1)
+        self.input(message)
+        self.crons()
+        self.output()
+        time.sleep(1)
 
     def start(self):
+        self.client.login()
+        self.load_plugins()
         if 'DAEMON' in self.config:
             if self.config.get('DAEMON'):
                 import daemon
                 with daemon.DaemonContext():
-                    self._start()
-        self._start()
-
-    def autoping(self):
-        # hardcode the interval to 3 seconds
-        now = int(time.time())
-        if now > self.last_ping + 3:
-            self.slack_client.server.ping()
-            self.last_ping = now
+                    self.client.init_websocket(self._start)
+        self.client.init_websocket(self._start)
 
     def input(self, data):
-        if "type" in data:
-            function_name = "process_" + data["type"]
+        if "event" in data and isinstance(data, dict):
+            function_name = "process_" + data['event']
             self._dbg("got {}".format(function_name))
             for plugin in self.bot_plugins:
                 plugin.do(function_name, data)
@@ -117,26 +121,16 @@ class RtmBot(object):
         for plugin in self.bot_plugins:
             limiter = False
             for output in plugin.do_output():
-                destination = output[0]
+                channel = output[0]
                 message = output[1]
-                # things that start with U are users. convert to an IM channel.
-                if destination.startswith('U'):
-                    try:
-                        result = json.loads(self.slack_client.api_call('im.open', user=destination))
-                    except ValueError:
-                        self._dbg("Parse error on im.open call results!")
-                    channel = self.slack_client.server.channels.find(
-                        result.get(u'channel', {}).get(u'id', None))
-                elif destination.startswith('G'):
-                    result = self.slack_client.api_call('groups.open', channel=destination)
-                    channel = self.slack_client.server.channels.find(destination)
-                else:
-                    channel = self.slack_client.server.channels.find(destination)
                 if channel is not None and message is not None:
                     if limiter:
                         time.sleep(.1)
                         limiter = False
-                    channel.send_message(message)
+                    # channel.send_message(message)
+                    plugin.client.api['posts'].create_post(options={
+                        'channel_id': channel,
+                        'message': message})
                     limiter = True
 
     def crons(self):
@@ -168,18 +162,18 @@ class RtmBot(object):
                     )
 
             plugin_config = self.config.get(cls.__name__, {})
-            plugin = cls(slack_client=self.slack_client, plugin_config=plugin_config)  # instatiate!
+            plugin = cls(client=self.client, plugin_config=plugin_config)  # instatiate!
             self.bot_plugins.append(plugin)
             self._dbg("Plugin registered: {}".format(plugin))
 
 
 class Plugin(object):
 
-    def __init__(self, name=None, slack_client=None, plugin_config=None):
+    def __init__(self, name=None, client=None, plugin_config=None):
         '''
         A plugin in initialized with:
             - name (str)
-            - slack_client - a connected instance of SlackClient - can be used to make API
+            - client - a connected instance of MattermostDriver - can be used to make API
                 calls within the plugins
             - plugin config (dict) - (from the yaml config)
                 Values in config:
@@ -193,7 +187,7 @@ class Plugin(object):
             self.plugin_config = {}
         else:
             self.plugin_config = plugin_config
-        self.slack_client = slack_client
+        self.client = client
         self.jobs = []
         self.debug = self.plugin_config.get('DEBUG', False)
         self.outputs = []
@@ -243,11 +237,11 @@ class Plugin(object):
 
                 if self.debug is True:
                     # this makes the plugin fail with stack trace in debug mode
-                    job_output = job.run(self.slack_client)
+                    job_output = job.run(self.client)
                 else:
                     # otherwise we log the exception and carry on
                     try:
-                        job_output = job.run(self.slack_client)
+                        job_output = job.run(self.client)
                     except Exception:
                         logging.exception("Problem in job run: {}".format(
                             job.__class__)
@@ -280,6 +274,7 @@ class Job(object):
             interval (int): The interval in seconds at which this Job's run
                 method should be called
     '''
+
     def __init__(self, interval):
         self.interval = interval
         self.lastrun = 0
@@ -297,14 +292,14 @@ class Job(object):
         else:
             return False
 
-    def run(self, slack_client):
+    def run(self, client):
         ''' This method is called from the plugin and is where the logic for
         your Job starts and finished. It is called every `interval` seconds
         from Job.check()
 
         :Args:
-            slackclient (Slackclient): An instance of the Slackclient API connector
-                this can be used to make calls directly to the Slack Web API if
+            client (Driver): An instance of the MattermostDriver API connector
+                this can be used to make calls directly to the Mattermost Web API if
                 necessary.
 
 

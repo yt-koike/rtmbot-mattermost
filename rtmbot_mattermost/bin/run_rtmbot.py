@@ -4,7 +4,7 @@ import sys
 import os
 import yaml
 
-from rtmbot import RtmBot
+from rtmbot_mattermost import RtmBot
 
 sys.path.append(os.getcwd())
 
