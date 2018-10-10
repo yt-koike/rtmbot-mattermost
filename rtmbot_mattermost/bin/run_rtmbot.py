@@ -1,11 +1,14 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
+from websockets.exceptions import ConnectionClosed
+from logging import getLogger
 import sys
 import os
 import yaml
 
 from rtmbot_mattermost import RtmBot
 
+logger = getLogger(__name__)
 sys.path.append(os.getcwd())
 
 
@@ -27,9 +30,24 @@ def main(args=None):
 
     config = yaml.load(open(args.config or 'rtmbot.conf', 'r'))
     bot = RtmBot(config)
+
     try:
         bot.start()
+    except ConnectionClosed:
+        while True:
+            try:
+                bot.connect()
+            except ConnectionClosed:
+                continue
+            except KeyboardInterrupt:
+                sys.exit(0)
+            except Exception as e:
+                logger.error(repr(e))
+                sys.exit(0)
     except KeyboardInterrupt:
+        sys.exit(0)
+    except Exception as e:
+        logger.error(repr(e))
         sys.exit(0)
 
 

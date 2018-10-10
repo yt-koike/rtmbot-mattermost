@@ -81,6 +81,22 @@ class RtmBot(object):
 
     def connect(self):
         self.client.login()
+        if 'DAEMON' in self.config:
+            if self.config.get('DAEMON'):
+                import daemon
+                with daemon.DaemonContext():
+                    self.client.init_websocket(self._start)
+        self.client.init_websocket(self._start)
+
+    def start(self):
+        self.client.login()
+        self.load_plugins()
+        if 'DAEMON' in self.config:
+            if self.config.get('DAEMON'):
+                import daemon
+                with daemon.DaemonContext():
+                    self.client.init_websocket(self._start)
+        self.client.init_websocket(self._start)
 
     @asyncio.coroutine
     def _start(self, m):
@@ -99,16 +115,6 @@ class RtmBot(object):
         self.crons()
         self.output()
         time.sleep(1)
-
-    def start(self):
-        self.client.login()
-        self.load_plugins()
-        if 'DAEMON' in self.config:
-            if self.config.get('DAEMON'):
-                import daemon
-                with daemon.DaemonContext():
-                    self.client.init_websocket(self._start)
-        self.client.init_websocket(self._start)
 
     def input(self, data):
         if "event" in data and isinstance(data, dict):
