@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='rtmbot-mattermost',
-    version='0.5',
+    version='0.5.1',
     description='A Mattermost bot written in python that connects via the RTM API.',
     author='ShotaKitazawa',
     author_email='skitazawa1121@gmail.com',

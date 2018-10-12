@@ -42,13 +42,15 @@ def main(args=None):
             except KeyboardInterrupt:
                 sys.exit(0)
             except Exception as e:
-                logger.error(repr(e))
-                sys.exit(0)
+                import traceback
+                logger.error(traceback.format_exc())
+                sys.exit(1)
     except KeyboardInterrupt:
         sys.exit(0)
     except Exception as e:
-        logger.error(repr(e))
-        sys.exit(0)
+        import traceback
+        logger.error(traceback.format_exc())
+        sys.exit(1)
 
 
 if __name__ == "__main__":
