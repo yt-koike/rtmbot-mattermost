@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
 from websockets.exceptions import ConnectionClosed
+from json.decoder import JSONDecodeError
 from logging import getLogger
 import sys
 import os
@@ -33,11 +34,11 @@ def main(args=None):
 
     try:
         bot.start()
-    except ConnectionClosed:
+    except (ConnectionClosed, JSONDecodeError):
         while True:
             try:
                 bot.connect()
-            except ConnectionClosed:
+            except (ConnectionClosed, JSONDecodeError):
                 continue
             except KeyboardInterrupt:
                 sys.exit(0)
