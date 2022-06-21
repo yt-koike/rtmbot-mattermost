@@ -66,7 +66,10 @@ class RtmBot(object):
             log_level = logging.DEBUG
         else:
             log_level = logging.INFO
-        logging.basicConfig(filename=log_file,
+        file_handler = logging.FileHandler(filename=log_file)
+        stdout_handler = logging.StreamHandler(sys.stdout)
+        handlers = [file_handler,stdout_handler]
+        logging.basicConfig(handlers=handlers,
                             level=log_level,
                             format='%(asctime)s %(message)s')
         logging.info('Initialized in: {}'.format(self.directory))
